@@ -947,9 +947,8 @@ function TrialBalance({ data, accountBalance }) {
   const rows = data.accounts
     .map((a) => {
       const { net } = accountBalance(a.id);
-      const isDebitNormal = a.type === "Asset" || a.type === "Expense";
-      const debitCol = isDebitNormal ? Math.max(net, 0) : Math.max(-net, 0);
-      const creditCol = isDebitNormal ? Math.max(-net, 0) : Math.max(net, 0);
+      const debitCol = Math.max(net, 0);
+      const creditCol = Math.max(-net, 0);
       return { ...a, debitCol, creditCol };
     })
     .filter((r) => r.debitCol > 0.004 || r.creditCol > 0.004);
