@@ -56,6 +56,14 @@ function newBookData() {
   return { accounts: seedAccounts(), entries: [] };
 }
 
+async function hashPassword(pw) {
+  const enc = new TextEncoder().encode(pw);
+  const buf = await crypto.subtle.digest("SHA-256", enc);
+  return Array.from(new Uint8Array(buf))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
 function inputStyle(w) {
   return {
     width: w,
@@ -77,14 +85,76 @@ export default function App() {
   const [toast, setToast] = useState(null);
   const [showBookModal, setShowBookModal] = useState(false);
   const [newBookName, setNewBookName] = useState("");
+  const [brandName, setBrandName] = useState("");
+  const [authState, setAuthState] = useState("checking"); // checking | setup | login | authed
+  const [authError, setAuthError] = useState("");
 
   useEffect(() => {
-    init();
+    checkAuth();
   }, []);
+
+  async function checkAuth() {
+    try {
+      const r = await window.storage.get("auth-credentials", false);
+      setAuthState(r ? "login" : "setup");
+    } catch (e) {
+      setAuthState("setup");
+    }
+  }
+
+  async function handleSetup(username, password) {
+    if (!username.trim() || !password) {
+      setAuthError("Enter a username and password");
+      return;
+    }
+    if (password.length < 4) {
+      setAuthError("Password should be at least 4 characters");
+      return;
+    }
+    const hash = await hashPassword(password);
+    await window.storage.set("auth-credentials", JSON.stringify({ username: username.trim(), hash }), false);
+    setAuthError("");
+    setAuthState("authed");
+    init();
+  }
+
+  async function handleLogin(username, password) {
+    try {
+      const r = await window.storage.get("auth-credentials", false);
+      const creds = JSON.parse(r.value);
+      const hash = await hashPassword(password);
+      if (username.trim() === creds.username && hash === creds.hash) {
+        setAuthError("");
+        setAuthState("authed");
+        init();
+      } else {
+        setAuthError("Incorrect username or password");
+      }
+    } catch (e) {
+      setAuthError("Something went wrong — try again");
+    }
+  }
+
+  function handleLogout() {
+    setAuthState("login");
+    setData(null);
+    setLoading(true);
+  }
+
+  async function saveBrandName(name) {
+    setBrandName(name);
+    try {
+      await window.storage.set("brand-name", name, false);
+    } catch (e) {}
+  }
 
   async function init() {
     setLoading(true);
     try {
+      try {
+        const b = await window.storage.get("brand-name", false);
+        if (b) setBrandName(b.value);
+      } catch (e) {}
       let list = [];
       try {
         const r = await window.storage.get("books-list", false);
@@ -199,6 +269,22 @@ export default function App() {
     persist({ ...data, accounts: data.accounts.filter((a) => a.id !== id) });
   }
 
+  if (authState === "checking") {
+    return (
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100vh", background: COLORS.bg, fontFamily: FONT_SANS, color: COLORS.sub }}>
+        Loading…
+      </div>
+    );
+  }
+
+  if (authState === "setup") {
+    return <AuthScreen mode="setup" error={authError} onSubmit={handleSetup} />;
+  }
+
+  if (authState === "login") {
+    return <AuthScreen mode="login" error={authError} onSubmit={handleLogin} />;
+  }
+
   if (loading || !data) {
     return (
       <div
@@ -228,6 +314,9 @@ export default function App() {
         view={view}
         setView={setView}
         onAddBook={() => setShowBookModal(true)}
+        brandName={brandName}
+        onBrandChange={saveBrandName}
+        onLogout={handleLogout}
       />
       <div style={{ flex: 1, overflow: "auto" }}>
         <div style={{ maxWidth: 1100, margin: "0 auto", padding: "32px 28px 80px" }}>
@@ -297,12 +386,54 @@ function NavItem({ label, active, onClick }) {
   );
 }
 
-function Sidebar({ books, activeBookId, onSwitch, view, setView, onAddBook }) {
+function Sidebar({ books, activeBookId, onSwitch, view, setView, onAddBook, brandName, onBrandChange, onLogout }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(brandName || "");
+
+  useEffect(() => {
+    setDraft(brandName || "");
+  }, [brandName]);
+
+  function commit() {
+    setEditing(false);
+    onBrandChange(draft.trim());
+  }
+
   return (
     <div style={{ width: 220, background: COLORS.sidebar, color: COLORS.sidebarText, display: "flex", flexDirection: "column", flexShrink: 0 }}>
       <div style={{ padding: "22px 16px 14px" }}>
-        <div style={{ fontFamily: FONT_SERIF, fontSize: 19, color: "#fff", letterSpacing: 0.3 }}>Ledger</div>
-        <div style={{ fontSize: 11, marginTop: 2, opacity: 0.7 }}>double-entry books</div>
+        <div style={{ fontFamily: FONT_SERIF, fontSize: 19, color: "#fff", letterSpacing: 0.3 }}>Nadeemiphone</div>
+        {editing ? (
+          <input
+            autoFocus
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onBlur={commit}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") commit();
+            }}
+            placeholder="Your name or business"
+            style={{
+              marginTop: 6,
+              width: "100%",
+              background: "rgba(255,255,255,0.08)",
+              border: "1px solid rgba(255,255,255,0.2)",
+              borderRadius: 4,
+              color: "#fff",
+              fontSize: 12,
+              padding: "4px 7px",
+              fontFamily: FONT_SANS,
+            }}
+          />
+        ) : (
+          <div
+            onClick={() => setEditing(true)}
+            title="Click to set your name or business name"
+            style={{ fontSize: 11.5, marginTop: 4, opacity: brandName ? 0.85 : 0.5, cursor: "pointer" }}
+          >
+            {brandName || "+ add your name/business"}
+          </div>
+        )}
       </div>
       <div style={{ padding: "0 16px 16px", borderBottom: "1px solid rgba(255,255,255,0.1)" }}>
         <div style={{ fontSize: 10.5, textTransform: "uppercase", letterSpacing: 0.8, opacity: 0.55, marginBottom: 6 }}>Book</div>
@@ -355,6 +486,14 @@ function Sidebar({ books, activeBookId, onSwitch, view, setView, onAddBook }) {
       <div style={{ padding: "12px 16px", fontSize: 10.5, opacity: 0.4, borderTop: "1px solid rgba(255,255,255,0.08)" }}>
         Saved automatically to this device
       </div>
+      <div style={{ padding: "0 16px 16px" }}>
+        <button
+          onClick={onLogout}
+          style={{ width: "100%", fontSize: 11.5, color: COLORS.sidebarText, background: "none", border: "1px solid rgba(255,255,255,0.15)", borderRadius: 5, padding: "7px 8px", cursor: "pointer" }}
+        >
+          Log out
+        </button>
+      </div>
     </div>
   );
 }
@@ -382,6 +521,80 @@ function BookModal({ value, onChange, onCancel, onSave }) {
             Create
           </button>
         </div>
+      </div>
+    </div>
+  );
+}
+
+function AuthScreen({ mode, error, onSubmit }) {
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [localError, setLocalError] = useState("");
+
+  function submit() {
+    if (mode === "setup" && password !== confirm) {
+      setLocalError("Passwords don't match");
+      return;
+    }
+    setLocalError("");
+    onSubmit(username, password);
+  }
+
+  const shownError = localError || error;
+
+  return (
+    <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100vh", background: COLORS.bg, fontFamily: FONT_SANS }}>
+      <div style={{ width: 340, background: COLORS.paper, border: `1px solid ${COLORS.rule}`, borderRadius: 10, padding: 28 }}>
+        <div style={{ fontFamily: FONT_SERIF, fontSize: 22, color: COLORS.ink, marginBottom: 4 }}>Nadeemiphone</div>
+        <div style={{ fontSize: 12.5, color: COLORS.sub, marginBottom: 22 }}>
+          {mode === "setup" ? "Create a username and password to protect this ledger." : "Log in to your ledger."}
+        </div>
+
+        <div style={{ marginBottom: 12 }}>
+          <div style={{ fontSize: 11, color: COLORS.sub, marginBottom: 5 }}>Username</div>
+          <input
+            autoFocus
+            value={username}
+            onChange={(e) => setUsername(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && submit()}
+            style={inputStyle("100%")}
+          />
+        </div>
+        <div style={{ marginBottom: mode === "setup" ? 12 : 20 }}>
+          <div style={{ fontSize: 11, color: COLORS.sub, marginBottom: 5 }}>Password</div>
+          <input
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && submit()}
+            style={inputStyle("100%")}
+          />
+        </div>
+        {mode === "setup" && (
+          <div style={{ marginBottom: 20 }}>
+            <div style={{ fontSize: 11, color: COLORS.sub, marginBottom: 5 }}>Confirm password</div>
+            <input
+              type="password"
+              value={confirm}
+              onChange={(e) => setConfirm(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && submit()}
+              style={inputStyle("100%")}
+            />
+          </div>
+        )}
+
+        {shownError && <div style={{ color: COLORS.debitRed, fontSize: 12, marginBottom: 14 }}>{shownError}</div>}
+
+        <button onClick={submit} style={{ width: "100%", padding: "9px 0", fontSize: 13, border: "none", borderRadius: 5, background: COLORS.accent, color: "#fff", cursor: "pointer" }}>
+          {mode === "setup" ? "Create account" : "Log in"}
+        </button>
+
+        {mode === "setup" && (
+          <div style={{ fontSize: 11, color: COLORS.sub, marginTop: 14, lineHeight: 1.5 }}>
+            This is stored only in this browser — the same login won't work on another device or browser unless you set it up there too.
+          </div>
+        )}
       </div>
     </div>
   );
@@ -855,4 +1068,3 @@ function Reports({ data, accountBalance }) {
     </div>
   );
 }
-
